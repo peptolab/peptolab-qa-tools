@@ -1,0 +1,25 @@
+# peptolab/peptolab-qa-tools
+
+> Shared QA toolchain for Peptolab PHP packages and applications: a Mago base config (format, lint, analyze), a strict PHPUnit template, and a reusable GitHub Actions CI workflow with Codecov and Infection on by default. Fork of contenir/contenir-qa-tools, itself a fork of php-db/phpdb-qa-tools.
+
+Key facts for setting up or changing a consuming repository:
+
+- Require it as `"peptolab/peptolab-qa-tools": "0.1.x-dev"` (or `^0.1`) in require-dev. Mago is a standalone binary, not a Composer dependency.
+- `mago.toml` starts with `extends = "vendor/peptolab/peptolab-qa-tools/mago.toml"` and adds only php-version, `[source]` paths and local overrides. Arrays concatenate, tables merge, child scalars win; an extending file cannot remove a base analyzer exclusion (repositories that analyse `test/` keep an inlined copy instead).
+- Peptolab repositories keep tests in `test/Unit` and `test/Integration`, with PHPUnit suites named `unit` and `integration`.
+- CI is one job calling `uses: peptolab/peptolab-qa-tools/.github/workflows/continuous-integration.yml@0.1.x` with `secrets: inherit` (or explicit secrets) and `with:` inputs. Every input has a description in that file.
+- Codecov (`enable-codecov`) and Infection (`enable-infection`, `min-msi` / `min-covered-msi` default 90) are on by default. CODECOV_TOKEN is a peptolab org secret. A repository without infection/infection, an infection.json5 and a `mutation-test` script must set `enable-infection: false`.
+- The workflow runs composer scripts, not tools directly: `test`, `test-coverage` (must write clover.xml), `test-integration`, `mutation-test` by default; rename via `test-script`, `test-coverage-script`, `integration-test-script`, `mutation-test-script`.
+- Libraries keep the default `dependency-versions` (`lowest`, `locked`, `latest`). Applications pass `dependency-versions: '["locked"]'`, `php-extensions`, `dotenv` (written to `.env` before install) and the `SSH_PRIVATE_KEY` secret for private VCS dependencies such as peptolab/php2pdf.
+- Other optional checks: `enable-rector`, `enable-composer-validate`, `enable-composer-audit`, `apt-packages` for system tools, `db-image` and friends for a database service.
+- Coverage runs on one leg: `coverage-php-version` (default: first `php-versions` entry) with `locked` dependencies.
+- An `attributions` job always runs and fails on AI attributions in PR titles, descriptions and commit messages.
+- Changes are merged in from contenir/contenir-qa-tools; Peptolab differs only in defaults and wording.
+
+## Docs
+
+- [README](README.md)
+- [Workflow architecture and full input list](docs/workflow-architecture.md)
+- [Migration guide](docs/migration.md)
+- [Rule rationale](docs/rules.md)
+- [Workflow source](.github/workflows/continuous-integration.yml)

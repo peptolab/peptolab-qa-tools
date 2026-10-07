@@ -4,20 +4,85 @@ on:
   workflow_call:
     inputs:
       php-versions:
-        description: "JSON array of PHP versions to run the matrix against."
+        description: "JSON array of PHP versions for the mago and test matrices, e.g. '[\"8.3\", \"8.4\"]'. Match the range composer.json's require.php allows. The first entry is the coverage version when coverage-php-version is empty."
         type: string
         required: false
         default: '["8.2", "8.3", "8.4", "8.5"]'
+      dependency-versions:
+        description: "JSON array of dependency strategies for the test matrix: \"lowest\" (composer update --prefer-lowest), \"locked\" (composer install from composer.lock) and \"latest\" (composer update). Libraries keep all three; applications, which deploy their lock file, pass '[\"locked\"]'. Coverage and mutation testing run on the locked leg, so keep \"locked\" in the list when either is enabled."
+        type: string
+        required: false
+        default: '["lowest", "locked", "latest"]'
+      php-extensions:
+        description: "Comma-separated PHP extensions for shivammathur/setup-php in every job that installs dependencies (mago, test, mutation-test), e.g. \"intl, pdo_mysql, gd\". Needed whenever composer.json requires ext-* packages the runner image lacks. Empty = the image defaults."
+        type: string
+        required: false
+        default: ""
       run-integration:
-        description: "Run the integration test suite in addition to the unit suite."
+        description: "Run the integration suite (the integration-test-script) after the unit suite on every test leg."
         type: boolean
         required: false
         default: false
       composer-options:
-        description: "Extra flags passed to composer install."
+        description: "Extra flags appended to every composer install/update, e.g. \"--ignore-platform-req=ext-oci8\"."
         type: string
         required: false
         default: ""
+      dotenv:
+        description: "Contents written to .env in the repository root before dependencies are installed in the test and mutation-test jobs, for applications that load .env at boot (e.g. vlucas/phpdotenv's createImmutable, which throws when the file is missing). Use test-env-json instead when real environment variables are enough. Empty = no file."
+        type: string
+        required: false
+        default: ""
+      test-env-json:
+        description: "JSON object of extra env vars exported (via $GITHUB_ENV) before the tests run in test and mutation-test, e.g. to override a phpunit.xml.dist connection setting for CI, since PHPUnit's <env> won't override an already-set real env var."
+        type: string
+        required: false
+        default: "{}"
+      apt-packages:
+        description: "Space-separated Ubuntu packages installed with apt-get before the test and mutation-test jobs run (e.g. \"imagemagick\" for a CLI the tests shell out to). Empty = none."
+        type: string
+        required: false
+        default: ""
+      test-script:
+        description: "Composer script that runs the unit suite on every test leg except the coverage leg."
+        type: string
+        required: false
+        default: "test"
+      test-coverage-script:
+        description: "Composer script that runs the unit suite with coverage on the coverage leg. It must write clover.xml to the repository root."
+        type: string
+        required: false
+        default: "test-coverage"
+      integration-test-script:
+        description: "Composer script that runs the integration suite when run-integration is true."
+        type: string
+        required: false
+        default: "test-integration"
+      mutation-test-script:
+        description: "Composer script that runs Infection in the mutation-test job; the workflow appends --min-msi, --min-covered-msi and --logger-github."
+        type: string
+        required: false
+        default: "mutation-test"
+      mago-guard:
+        description: "Run mago guard in the mago job (architectural rules from the [guard] section of mago.toml)."
+        type: boolean
+        required: false
+        default: true
+      enable-rector:
+        description: "Run vendor/bin/rector process --dry-run in the mago job, failing when Rector would change code. Requires rector/rector in require-dev and a rector.php."
+        type: boolean
+        required: false
+        default: false
+      enable-composer-validate:
+        description: "Turn on the composer job's composer validate --strict step."
+        type: boolean
+        required: false
+        default: false
+      enable-composer-audit:
+        description: "Turn on the composer job's composer audit --locked step, failing on known security advisories in the locked dependencies (abandoned packages are reported, not failed)."
+        type: boolean
+        required: false
+        default: false
       db-image:
         description: "Container image for the DB service (e.g. mysql:8.0). Empty = no DB."
         type: string
@@ -49,17 +114,17 @@ on:
         required: false
         default: 2
       enable-codecov:
-        description: "Turn on the codecov job."
+        description: "Run the codecov job, which uploads the coverage leg's clover.xml. On by default for Peptolab; needs the CODECOV_TOKEN secret (a peptolab org secret, so secrets: inherit is enough), and a failed upload fails the build. Set false to opt out."
         type: boolean
         required: false
-        default: false
+        default: true
       enable-infection:
-        description: "Turn on the mutation-test job."
+        description: "Run the mutation-test job. On by default for Peptolab; needs infection/infection in require-dev, an infection.json5(.dist) and the mutation-test-script. Set false to opt out."
         type: boolean
         required: false
-        default: false
+        default: true
       coverage-php-version:
-        description: "Which php-versions entry is canonical for coverage/mutation testing."
+        description: "Which php-versions entry runs coverage and mutation testing. Empty = the first php-versions entry."
         type: string
         required: false
         default: ""
@@ -67,26 +132,21 @@ on:
         description: "Minimum Mutation Score Indicator (%) required to pass the mutation-test job."
         type: string
         required: false
-        default: "10"
+        default: "90"
       min-covered-msi:
         description: "Minimum covered-code MSI (%) required to pass the mutation-test job."
         type: string
         required: false
-        default: "10"
-      test-env-json:
-        description: "JSON object of extra env vars exported before running tests (e.g. to override a phpunit.xml.dist connection setting for CI, since PHPUnit's <env> won't override an already-set real env var)."
-        type: string
-        required: false
-        default: "{}"
-      apt-packages:
-        description: "Space-separated Ubuntu packages installed with apt-get before the test and mutation-test jobs run (e.g. \"imagemagick\" for a CLI the tests shell out to). Empty = none."
-        type: string
-        required: false
-        default: ""
+        default: "90"
     secrets:
       CODECOV_TOKEN:
+        description: "Codecov upload token. An org-wide token works because the upload passes the calling repository as the slug."
         required: false
       INFECTION_DASHBOARD_API_KEY:
+        description: "Stryker dashboard key for publishing mutation reports. Optional; without it the report stays in the job log."
+        required: false
+      SSH_PRIVATE_KEY:
+        description: "Private key loaded into ssh-agent before composer runs, for dependencies Composer clones over SSH (e.g. a private VCS repository). Use a read-only deploy key on the dependency's repository."
         required: false
 
 jobs:
@@ -133,9 +193,33 @@ jobs:
 
           echo "No attributions found."
 
+  composer:
+    name: "Composer"
+    if: inputs.enable-composer-validate || inputs.enable-composer-audit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.coverage-php-version || fromJSON(inputs.php-versions)[0] }}
+          coverage: none
+
+      - name: Validate composer.json
+        if: inputs.enable-composer-validate
+        run: composer validate --strict
+
+      - name: Security audit
+        if: (success() || failure()) && inputs.enable-composer-audit
+        run: composer audit --locked --abandoned=report
+
   mago:
     name: "Mago (PHP ${{ matrix.php }})"
     runs-on: ubuntu-24.04
+    env:
+      HAS_SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -148,8 +232,15 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php-extensions }}
           coverage: none
           tools: mago
+
+      - name: Load SSH key
+        if: env.HAS_SSH_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Install dependencies
         run: composer install --no-interaction --no-progress ${{ inputs.composer-options }}
@@ -171,8 +262,12 @@ jobs:
         run: mago analyze
 
       - name: Guard
-        if: success() || failure()
+        if: (success() || failure()) && inputs.mago-guard
         run: mago guard
+
+      - name: Rector
+        if: (success() || failure()) && inputs.enable-rector
+        run: vendor/bin/rector process --dry-run --no-progress-bar
 
   test:
     name: "Test (PHP ${{ matrix.php }} | ${{ matrix.dependencies }})"
@@ -181,7 +276,11 @@ jobs:
       fail-fast: false
       matrix:
         php: ${{ fromJSON(inputs.php-versions) }}
-        dependencies: ["lowest", "locked", "latest"]
+        dependencies: ${{ fromJSON(inputs.dependency-versions) }}
+    env:
+      HAS_SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      # Coverage is collected on one leg only, and only when something consumes it.
+      COVERAGE_LEG: ${{ (inputs.enable-codecov || inputs.enable-infection) && matrix.php == (inputs.coverage-php-version || fromJSON(inputs.php-versions)[0]) && matrix.dependencies == 'locked' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -190,7 +289,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          coverage: ${{ (matrix.php == inputs.coverage-php-version && matrix.dependencies == 'locked') && 'pcov' || 'none' }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: ${{ env.COVERAGE_LEG == 'true' && 'pcov' || 'none' }}
 
       # System tools the tests shell out to (e.g. ImageMagick's CLI). Passed
       # through an env var and word-split, never interpolated into the script.
@@ -225,6 +325,20 @@ jobs:
           done
           echo "DB did not become healthy in time" && exit 1
 
+      # Written before composer runs, since an application's install scripts
+      # may already boot it. Passed through an env var, never interpolated.
+      - name: Write .env
+        if: inputs.dotenv != ''
+        env:
+          DOTENV: ${{ inputs.dotenv }}
+        run: printf '%s\n' "$DOTENV" > .env
+
+      - name: Load SSH key
+        if: env.HAS_SSH_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
       # Resolve dependencies at the configured strategy level.
       # "locked" uses the committed composer.lock as-is.
       - name: Install dependencies (lowest)
@@ -248,19 +362,19 @@ jobs:
         run: echo '${{ inputs.test-env-json }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
 
       - name: Unit tests
-        if: ${{ !(matrix.php == inputs.coverage-php-version && matrix.dependencies == 'locked') }}
-        run: composer test
+        if: env.COVERAGE_LEG != 'true'
+        run: composer ${{ inputs.test-script }}
 
       - name: Unit tests with coverage
-        if: matrix.php == inputs.coverage-php-version && matrix.dependencies == 'locked'
-        run: composer test-coverage
+        if: env.COVERAGE_LEG == 'true'
+        run: composer ${{ inputs.test-coverage-script }}
 
       - name: Integration tests
         if: inputs.run-integration
-        run: composer test-integration
+        run: composer ${{ inputs.integration-test-script }}
 
       - name: Upload coverage artifact
-        if: matrix.php == inputs.coverage-php-version && matrix.dependencies == 'locked'
+        if: env.COVERAGE_LEG == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-clover
@@ -298,6 +412,8 @@ jobs:
     needs: [test]
     if: inputs.enable-infection
     runs-on: ubuntu-24.04
+    env:
+      HAS_SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -305,7 +421,8 @@ jobs:
       - name: Set up PHP and Mago
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ inputs.coverage-php-version }}
+          php-version: ${{ inputs.coverage-php-version || fromJSON(inputs.php-versions)[0] }}
+          extensions: ${{ inputs.php-extensions }}
           coverage: pcov
           tools: mago
 
@@ -335,6 +452,18 @@ jobs:
           done
           echo "DB did not become healthy in time" && exit 1
 
+      - name: Write .env
+        if: inputs.dotenv != ''
+        env:
+          DOTENV: ${{ inputs.dotenv }}
+        run: printf '%s\n' "$DOTENV" > .env
+
+      - name: Load SSH key
+        if: env.HAS_SSH_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
       - name: Install dependencies
         run: composer install --no-interaction --no-progress ${{ inputs.composer-options }}
 
@@ -343,11 +472,11 @@ jobs:
         run: echo '${{ inputs.test-env-json }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
 
       - name: Pin Mago PHP version
-        run: echo "MAGO_PHP_VERSION=${{ inputs.coverage-php-version }}" >> "$GITHUB_ENV"
+        run: echo "MAGO_PHP_VERSION=${{ inputs.coverage-php-version || fromJSON(inputs.php-versions)[0] }}" >> "$GITHUB_ENV"
 
       # Mago is invoked internally by Infection itself (staticAnalysisTool config
       # in infection.json5), not by this workflow directly — no needs:[mago] here.
       - name: Mutation testing
         env:
           INFECTION_DASHBOARD_API_KEY: ${{ secrets.INFECTION_DASHBOARD_API_KEY }}
-        run: composer mutation-test -- --min-msi=${{ inputs.min-msi }} --min-covered-msi=${{ inputs.min-covered-msi }} --logger-github
+        run: composer ${{ inputs.mutation-test-script }} -- --min-msi=${{ inputs.min-msi }} --min-covered-msi=${{ inputs.min-covered-msi }} --logger-github

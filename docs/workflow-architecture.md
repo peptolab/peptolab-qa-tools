@@ -3,13 +3,17 @@
 This document describes the job-split design implemented in
 [`continuous-integration.yml`](../.github/workflows/continuous-integration.yml):
 an attribution check, Mago, a PHPUnit matrix with an optional seeded RDBMS for
-integration testing, plus optional Codecov and Infection mutation testing.
+integration testing, plus optional Composer checks, Codecov and Infection
+mutation testing. It serves libraries (the defaults) and applications (see
+[Applications](#applications)).
 
 The design is inherited from
 [php-db/phpdb-qa-tools](https://github.com/php-db/phpdb-qa-tools) via
 [contenir/contenir-qa-tools](https://github.com/contenir/contenir-qa-tools),
-which adds the `attributions` job, the `apt-packages` input, Codecov failing
-the build, and runners pinned to `ubuntu-24.04`.
+which adds the `attributions` and `composer` jobs, the application inputs, the
+`apt-packages` input, Codecov failing the build, and runners pinned to
+`ubuntu-24.04`. Peptolab changes only the defaults: Codecov and Infection are
+on, with both MSI thresholds at 90.
 
 ## Job graph
 
@@ -19,12 +23,13 @@ else runs in parallel for speed.
 ```mermaid
 graph LR
     attributions[attributions job]
+    composer[composer job]
     mago[mago job]
     test[test job] --> codecov[codecov job]
     test --> infection[mutation-test job]
 ```
 
-- `attributions`, `mago` and `test` have **no `needs:`** between them —
+- `attributions`, `composer`, `mago` and `test` have **no `needs:`** between them —
   they're independent gates, none consumes another's output.
 - `codecov` and `mutation-test` both **`needs: [test]`** — real dependencies
   (artifact consumption / gating), not just ordering preference.
@@ -40,15 +45,25 @@ and every commit between the base branch and `HEAD`; on `push` it checks the
 pushed range (`before..after`), falling back to the last commit when a branch
 is first created. Any match fails the build with an error annotation.
 
+## `composer` job
+
+Runs only when `enable-composer-validate` or `enable-composer-audit` is set:
+`composer validate --strict`, then `composer audit --locked
+--abandoned=report` (known advisories in the lock file fail the job; abandoned
+packages are only reported). No dependency install is needed.
+
 ## `mago` job
 
 Matrix: `php-versions` only. Runs `mago format --check`, `mago lint`,
-`mago analyze`, `mago guard`. No DB, no dependency-strategy matrix — the
-committed `composer.lock` is enough for type resolution.
+`mago analyze`, and `mago guard` (unless `mago-guard: false`), plus
+`vendor/bin/rector process --dry-run` when `enable-rector` is set. No DB, no
+dependency-strategy matrix — the committed `composer.lock` is enough for type
+resolution.
 
 ## `test` job
 
-Matrix: `php x [lowest, locked, latest]`.
+Matrix: `php-versions x dependency-versions`, by default
+`php x [lowest, locked, latest]`.
 
 ### System packages
 
@@ -111,11 +126,12 @@ caller, since Oracle/MSSQL images can take several minutes to become ready.
 
 ### Coverage
 
-Unit tests always run; integration tests run `if: inputs.run-integration`.
-On exactly one canonical leg (`matrix.php == inputs.coverage-php-version &&
-matrix.dependencies == 'locked'`), coverage is collected (pcov → `clover.xml`)
-and uploaded via `actions/upload-artifact` — the only leg downstream jobs
-need.
+Unit tests always run (`test-script`); integration tests run
+`if: inputs.run-integration` (`integration-test-script`). When `codecov` or
+`mutation-test` is enabled, exactly one canonical leg — `coverage-php-version`
+(or the first `php-versions` entry) with `locked` dependencies — runs
+`test-coverage-script` under pcov instead, and uploads `clover.xml` via
+`actions/upload-artifact` for the downstream jobs.
 
 ## `codecov` job
 
@@ -151,17 +167,38 @@ the repo at dashboard.stryker-mutator.io). Either
 var name. **Must be passed as an `env:` block on the `run:` step, not as a
 `with:` input** — Infection reads it from the environment, not a CLI flag.
 
-`min-msi` / `min-covered-msi` (both default `"10"`) control the MSI
-threshold that fails the job. The default is deliberately low for
-repositories just adopting mutation testing; raise both once a repository
-has a real baseline to ratchet up from. Passed as `composer mutation-test -- --min-msi=...
+`min-msi` / `min-covered-msi` (both default `"90"` in Peptolab) control the
+MSI threshold that fails the job. A repository still building its baseline
+lowers them in its caller and ratchets them back up. Passed as `composer mutation-test -- --min-msi=...
 --min-covered-msi=... --logger-github` (the composer script itself stays
 plain `infection`, flags are appended at invocation time).
 
+## Applications
+
+The defaults suit a library. An application deploys its lock file, boots from
+configuration and may depend on private repositories, so the workflow takes:
+
+- `dependency-versions: '["locked"]'` — only the deployed dependency set is tested.
+- `php-extensions` — the `ext-*` packages composer.json requires, for every job
+  that installs dependencies.
+- `dotenv` — written to `.env` before dependencies install, for apps whose
+  bootstrap loads it (phpdotenv's `createImmutable()` throws without it).
+- `SSH_PRIVATE_KEY` secret — loaded into ssh-agent before every composer run,
+  for VCS dependencies cloned over SSH. Pass it explicitly
+  (`secrets: { SSH_PRIVATE_KEY: ${{ secrets.MY_DEPLOY_KEY }} }`) or name the
+  repository secret `SSH_PRIVATE_KEY` and use `secrets: inherit`.
+- `test-script` / `test-coverage-script` / `integration-test-script` /
+  `mutation-test-script` — when the app's composer scripts use other names.
+- `enable-rector`, `enable-composer-validate`, `enable-composer-audit` — checks
+  an application usually runs alongside Mago.
+
+Anything else app-specific (a macOS leg, a second database engine) stays as an
+extra job in the caller's workflow next to `uses:`.
+
 ## Secrets
 
-Because `CODECOV_TOKEN` is org-scoped and `INFECTION_DASHBOARD_API_KEY` is
-repo-scoped, each consuming repo's caller workflow should invoke this
+Because `CODECOV_TOKEN` is org-scoped and `INFECTION_DASHBOARD_API_KEY` and
+`SSH_PRIVATE_KEY` are repo-scoped, each consuming repo's caller workflow should invoke this
 reusable workflow with `secrets: inherit` rather than an explicit per-secret
 mapping — it transparently pulls from whichever scope actually defines each
 secret. Cross-repo `secrets: inherit` works for reusable workflows called
@@ -171,25 +208,36 @@ within the same GitHub org.
 
 | Input | Purpose |
 |---|---|
-| `php-versions` | JSON array of PHP versions for the matrix (default `["8.2", "8.3", "8.4", "8.5"]`). |
+| `php-versions` | JSON array of PHP versions for the matrix (default `["8.2", "8.3", "8.4", "8.5"]`). The first entry is the coverage version when `coverage-php-version` is empty. |
+| `dependency-versions` | JSON array of dependency strategies (default `["lowest", "locked", "latest"]`). Applications pass `["locked"]`. Keep `locked` when coverage or mutation testing is on. |
+| `php-extensions` | Comma-separated extensions for setup-php in the `mago`, `test` and `mutation-test` jobs. |
 | `run-integration` | Run the integration suite as well as the unit suite (default `false`). |
-| `composer-options` | Extra flags passed to `composer install`. |
+| `composer-options` | Extra flags passed to every `composer install` / `update`. |
+| `dotenv` | Contents written to `.env` before dependencies install in `test` and `mutation-test`. Empty (default) writes nothing. |
+| `test-script` | Composer script for the unit suite (default `test`). |
+| `test-coverage-script` | Composer script for the coverage leg; must write `clover.xml` (default `test-coverage`). |
+| `integration-test-script` | Composer script for the integration suite (default `test-integration`). |
+| `mutation-test-script` | Composer script that runs Infection (default `mutation-test`). |
+| `mago-guard` | Run `mago guard` (default `true`). |
+| `enable-rector` | Run `vendor/bin/rector process --dry-run` in the `mago` job (default `false`). |
+| `enable-composer-validate` | Run `composer validate --strict` in the `composer` job (default `false`). |
+| `enable-composer-audit` | Run `composer audit --locked` in the `composer` job (default `false`). |
 | `db-image` | Container image for the DB service (e.g. `mysql:8.0`). Empty = no DB. |
 | `db-env-json` | JSON object of container env vars. |
 | `db-port` | Port to expose/map. |
 | `db-health-cmd` | Command run via `docker exec` to check readiness. |
 | `db-health-retries` | Max health-check attempts (default `30`). Raise for slow-starting engines (Oracle, MSSQL). |
 | `db-health-interval-seconds` | Seconds to sleep between health-check attempts (default `2`). |
-| `enable-codecov` | Turns on the `codecov` job. |
-| `enable-infection` | Turns on the `mutation-test` job. |
-| `coverage-php-version` | Which matrix leg is canonical for coverage/mutation. |
-| `min-msi` | Minimum MSI (%) required to pass `mutation-test` (default `"10"`). |
-| `min-covered-msi` | Minimum covered-code MSI (%) required to pass `mutation-test` (default `"10"`). |
+| `enable-codecov` | Runs the `codecov` job (default `true` in Peptolab). |
+| `enable-infection` | Runs the `mutation-test` job (default `true` in Peptolab). |
+| `coverage-php-version` | Which matrix leg is canonical for coverage/mutation. Empty (default) = the first `php-versions` entry. |
+| `min-msi` | Minimum MSI (%) required to pass `mutation-test` (default `"90"`). |
+| `min-covered-msi` | Minimum covered-code MSI (%) required to pass `mutation-test` (default `"90"`). |
 | `test-env-json` | JSON object of extra env vars exported (via `$GITHUB_ENV`) before running tests in `test` and `mutation-test`. |
 | `apt-packages` | Space-separated Ubuntu packages `apt-get install`ed at the start of `test` and `mutation-test`, for tools the tests shell out to (e.g. `imagemagick`). Empty (default) skips the step. |
 
-Plus `secrets: CODECOV_TOKEN`, `INFECTION_DASHBOARD_API_KEY` on
-`workflow_call` (both `required: false`).
+Plus `secrets: CODECOV_TOKEN`, `INFECTION_DASHBOARD_API_KEY`,
+`SSH_PRIVATE_KEY` on `workflow_call` (all `required: false`).
 
 ### Overriding a `phpunit.xml.dist` connection setting for CI
 
