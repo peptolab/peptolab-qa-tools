@@ -1,10 +1,10 @@
 #:schema https://mago.carthage.software/1.43.0/schema.json
-# php-db/phpdb-qa-tools — shared base configuration.
+# peptolab/peptolab-qa-tools — shared base configuration (forked from contenir/contenir-qa-tools, from php-db/phpdb-qa-tools).
 #
 # Consuming repositories extend this file and supply the project-specific
 # facts (php-version, source paths, class-initializers, etc.):
 #
-#   extends = "vendor/php-db/phpdb-qa-tools/mago.toml"
+#   extends = "vendor/peptolab/peptolab-qa-tools/mago.toml"
 #   php-version = "8.2.0"
 #
 #   [source]

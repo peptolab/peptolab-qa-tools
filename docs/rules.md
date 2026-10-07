@@ -1,9 +1,12 @@
 # Rule rationale
 
 Why the non-default choices in the shared `mago.toml` are what they are. The
-configuration was extracted from the `phpdb-validator` refactor — the first
-php-db component migrated to Mago — and reflects what survived contact with a
-real codebase.
+configuration is inherited unchanged, via
+[contenir/contenir-qa-tools](https://github.com/contenir/contenir-qa-tools), from
+[php-db/phpdb-qa-tools](https://github.com/php-db/phpdb-qa-tools), where it was
+extracted from the `phpdb-validator` refactor — the first php-db component
+migrated to Mago — and reflects what survived contact with a real codebase.
+Peptolab packages adopt it as-is.
 
 ## Formatter
 
@@ -26,7 +29,7 @@ real codebase.
   build. Rules relegated to `level = "Help"` are still enforced; the level only
   affects display severity.
 - **`integrations = ["laminas", "phpunit"]`** — enables framework-aware rules
-  for the two ecosystems every php-db component sits in.
+  for the two ecosystems the shared base was written for.
 - **Naming rules** (`class-name`, `interface-name`, `trait-name` with
   `psr = true`; camelCase methods/variables) — direct continuation of the
   PSR-12/laminas-coding-standard naming policy.
@@ -53,7 +56,7 @@ real codebase.
   migration friction; repositories may relax them locally with a tracking
   issue.
 - **`class-initializers`** — the base lists only the one initializer every
-  php-db component shares, `PHPUnit\Framework\TestCase::setUp`. Because arrays
+  component shares, `PHPUnit\Framework\TestCase::setUp`. Because arrays
   concatenate on merge, repositories append their own (e.g. Laminas'
   `Element::init` / `BaseInputFilter::init`, ...) without repeating the base
   list.
@@ -62,5 +65,6 @@ real codebase.
 
 Following laminas-coding-standard's precedent: enabling new rules (or
 tightening existing ones) lands only in **major** releases of this package.
+Rule changes merged in from upstream follow the same policy.
 Minor and patch releases may fix documentation, templates, or relax/adjust
 rules in a backwards-compatible direction.
