@@ -1,10 +1,10 @@
 {
-    "name": "php-db/phpdb-qa-tools",
-    "description": "Shared QA toolchain for php-db components: Mago formatting, linting and static analysis, plus the PHPUnit baseline and CI workflow.",
+    "name": "peptolab/peptolab-qa-tools",
+    "description": "Shared QA toolchain for Peptolab packages: Mago formatting, linting and static analysis, plus the PHPUnit baseline and CI workflow. Forked from contenir/contenir-qa-tools.",
     "license": "BSD-3-Clause",
     "type": "library",
     "keywords": [
-        "phpdb",
+        "peptolab",
         "qa",
         "coding-standards",
         "mago",
@@ -12,11 +12,9 @@
         "formatter",
         "static-analysis"
     ],
-    "homepage": "https://github.com/php-db/phpdb-qa-tools",
+    "homepage": "https://github.com/peptolab/peptolab-qa-tools",
     "support": {
-        "issues": "https://github.com/php-db/phpdb-qa-tools/issues",
-        "source": "https://github.com/php-db/phpdb-qa-tools",
-        "forum": "https://github.com/php-db/phpdb-qa-tools/discussions"
+        "source": "https://github.com/peptolab/peptolab-qa-tools"
     },
     "require": {
         "php": "~8.2.0 || ~8.3.0 || ~8.4.0 || ~8.5.0"

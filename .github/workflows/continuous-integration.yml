@@ -99,7 +99,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Contenir policy: no AI attribution in PR titles, descriptions or
+      # Peptolab policy: no AI attribution in PR titles, descriptions or
       # commit messages. Pull requests check the title, description and every
       # commit on the branch; pushes check the commits that were pushed.
       - name: Check PR text and commit messages
@@ -286,11 +286,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           # CODECOV_TOKEN is an org-wide upload token, which can't infer the
           # target repo the way a repo-specific token can. `github.repository`
-          # resolves to the *calling* repo here, not phpdb-qa-tools.
+          # resolves to the *calling* repo here, not peptolab-qa-tools.
           slug: ${{ github.repository }}
           files: clover.xml
-          # Contenir packages are fully covered, so a failed upload (missing
-          # token, Codecov outage) must fail the job rather than pass silently.
+          # A failed upload (missing token, Codecov outage) must fail the job
+          # rather than pass silently and hide a coverage regression.
           fail_ci_if_error: true
 
   mutation-test:
